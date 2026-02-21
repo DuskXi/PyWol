@@ -1,0 +1,54 @@
+// ── PyWol Global Styles ─────────────────────────────
+
+.stat-card {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  &:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12) !important;
+  }
+}
+
+.machine-card {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1) !important;
+  }
+}
+
+.group-card {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  &:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1) !important;
+  }
+}
+
+// Status indicator dot
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  &.online {
+    background-color: $positive;
+    box-shadow: 0 0 8px rgba($positive, 0.6);
+  }
+  &.offline {
+    background-color: $negative;
+  }
+  &.unknown {
+    background-color: grey;
+  }
+}
+
+// Page title style
+.page-title {
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+// Table tweaks
+.q-table__card {
+  box-shadow: none !important;
+}

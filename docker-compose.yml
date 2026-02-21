@@ -1,0 +1,23 @@
+services:
+  pywol:
+    build: .
+    container_name: pywol
+    # network_mode: host is required for WOL broadcast packets
+    # to reach the local network (both etherwake and socket method)
+    network_mode: host
+    volumes:
+      - pywol_data:/app/data
+    environment:
+      - TZ=Asia/Shanghai
+      # WOL sending method: auto | etherwake | socket
+      #   auto (default) – try etherwake first, fall back to socket
+      #   etherwake       – Layer 2 raw frame, more reliable
+      #   socket          – pure Python UDP broadcast
+      - WOL_METHOD=auto
+      # Network interface for etherwake (e.g. eth0, ens18).
+      # Leave empty to use default interface.
+      # - WOL_INTERFACE=eth0
+    restart: unless-stopped
+
+volumes:
+  pywol_data:

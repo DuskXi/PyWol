@@ -1,0 +1,11 @@
+__pycache__
+*.pyc
+.git
+.venv
+data/
+WolGUI/node_modules
+WolGUI/dist
+WolGUI/.quasar
+static/
+*.egg-info
+.env
