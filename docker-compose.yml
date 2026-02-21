@@ -19,7 +19,7 @@ services:
       # Network interface for etherwake (e.g. eth0, ens18).
       # ⚠️  etherwake without -i picks the wrong NIC in Docker!
       #     If you need Layer 2 WOL, uncomment and set the correct interface:
-      # - WOL_INTERFACE=eth0
+      - WOL_INTERFACE=eth0
     restart: unless-stopped
 
 volumes:
