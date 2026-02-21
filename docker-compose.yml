@@ -12,12 +12,13 @@ services:
     environment:
       - TZ=Asia/Shanghai
       # WOL sending method: auto | etherwake | socket
-      #   auto (default) – try etherwake first, fall back to socket
-      #   etherwake       – Layer 2 raw frame, more reliable
-      #   socket          – pure Python UDP broadcast
+      #   auto (default) – smart: if WOL_INTERFACE set → etherwake; else → socket (UDP)
+      #   etherwake       – Layer 2 raw frame (MUST set WOL_INTERFACE!)
+      #   socket          – pure Python UDP broadcast (same as wakeonlan)
       - WOL_METHOD=auto
       # Network interface for etherwake (e.g. eth0, ens18).
-      # Leave empty to use default interface.
+      # ⚠️  etherwake without -i picks the wrong NIC in Docker!
+      #     If you need Layer 2 WOL, uncomment and set the correct interface:
       # - WOL_INTERFACE=eth0
     restart: unless-stopped
 

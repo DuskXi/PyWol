@@ -2,13 +2,23 @@
 WOL (Wake-on-LAN) core module.
 
 Supports two sending methods, configurable via environment variable WOL_METHOD:
-  - "auto"      (default) try etherwake first, fall back to socket
-  - "etherwake"  use etherwake only (Layer 2, Linux, more reliable)
+  - "auto"       (default) smart selection based on configuration:
+                   • if WOL_INTERFACE is set → etherwake (Layer 2, most reliable)
+                   • otherwise → UDP socket (same as wakeonlan)
+  - "etherwake"  use etherwake only (Layer 2, Linux)
   - "socket"     use pure Python UDP broadcast (cross-platform)
 
 Environment variables:
   WOL_METHOD    – sending method (auto / etherwake / socket)
   WOL_INTERFACE – network interface for etherwake, e.g. "eth0"
+
+NOTE on etherwake:
+  etherwake sends raw Ethernet frames (Layer 2). Without an explicit
+  interface (-i), it picks the first non-loopback NIC it finds, which
+  in Docker (even with network_mode: host) is often wrong (e.g. docker0,
+  veth*, br-*). The command still exits 0, so failures are *silent*.
+  → Always set WOL_INTERFACE when using etherwake.
+  → In auto mode, etherwake is only used when WOL_INTERFACE is set.
 """
 
 import asyncio
@@ -106,7 +116,7 @@ def send_wol(
     """Send a WOL magic packet using the configured method.
 
     The method is determined by the WOL_METHOD environment variable:
-      - "auto"      – try etherwake, fall back to socket (default)
+      - "auto"      – smart: etherwake (if WOL_INTERFACE set), else socket
       - "etherwake"  – etherwake only; raises if unavailable
       - "socket"     – pure Python UDP socket only
 
@@ -129,13 +139,19 @@ def send_wol(
                     "Install: apt-get install etherwake, "
                     "or set WOL_METHOD=auto to enable fallback."
                 )
+            if not WOL_INTERFACE:
+                logger.warning(
+                    "etherwake without WOL_INTERFACE may use the wrong NIC! "
+                    "Set WOL_INTERFACE=<your_nic> (e.g. eth0) for reliable operation."
+                )
             _send_via_etherwake(mac_address)
 
         elif WOL_METHOD == "socket":
             _send_via_socket(mac_address, broadcast, port)
 
         else:  # auto
-            if _etherwake_available():
+            if WOL_INTERFACE and _etherwake_available():
+                # WOL_INTERFACE is explicitly set → etherwake with correct NIC
                 try:
                     _send_via_etherwake(mac_address)
                 except Exception as e:
@@ -144,7 +160,15 @@ def send_wol(
                     )
                     _send_via_socket(mac_address, broadcast, port)
             else:
-                logger.debug("etherwake not available, using socket method")
+                # No interface specified → use UDP socket (same as wakeonlan)
+                # etherwake without -i is unreliable: it picks the first NIC
+                # it finds, which in Docker is often wrong (docker0, veth*, etc.)
+                if _etherwake_available() and not WOL_INTERFACE:
+                    logger.debug(
+                        "etherwake available but WOL_INTERFACE not set; "
+                        "using socket method (UDP broadcast) for reliability. "
+                        "Set WOL_INTERFACE=<nic> to use etherwake."
+                    )
                 _send_via_socket(mac_address, broadcast, port)
 
         return True
