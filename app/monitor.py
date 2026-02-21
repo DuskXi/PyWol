@@ -9,6 +9,8 @@ Anti-storm design
   3. Each monitor has a hard cap on both **attempts** and **elapsed time**.
   4. Completed monitors are auto-evicted from memory after a short TTL
      so the dict never grows unboundedly.
+  5. A generation counter prevents stale eviction tasks from deleting
+     a newer monitor for the same machine.
 """
 
 from __future__ import annotations
@@ -40,10 +42,11 @@ class MonitorState:
     machine_id: int
     machine_name: str
     ip_address: str
+    generation: int = 0                    # distinguishes successive monitors
     status: MonitorStatus = MonitorStatus.PENDING
     attempts: int = 0
     max_attempts: int = 15
-    interval: float = 10.0       # seconds between pings
+    interval: float = 10.0                 # seconds between pings
     started_at: float = field(default_factory=time.time)
     finished_at: Optional[float] = None
     _task: Optional[asyncio.Task] = field(default=None, repr=False)
@@ -85,13 +88,17 @@ class WakeMonitorManager:
       • At most ONE monitor per machine_id at any time.
       • Re-waking cancels the existing monitor (no accumulation).
       • Completed monitors are auto-evicted after ``_EVICT_AFTER`` seconds.
+      • Generation counters prevent stale eviction tasks from removing
+        a newer monitor for the same machine.
     """
 
     _EVICT_AFTER: int = 300  # keep finished monitor info for 5 min
+    _MAX_CONCURRENT: int = 50  # hard cap on total active monitors
 
     def __init__(self) -> None:
         self._monitors: dict[int, MonitorState] = {}
         self._lock = asyncio.Lock()
+        self._generation: int = 0  # global generation counter
 
     # ── public API ───────────────────────────────────
     async def start(
@@ -110,31 +117,57 @@ class WakeMonitorManager:
         async with self._lock:
             self._cancel_existing(machine_id)
 
+            # Hard cap — refuse if too many monitors are active
+            active = sum(
+                1 for s in self._monitors.values() if not s.is_terminal
+            )
+            if active >= self._MAX_CONCURRENT:
+                logger.warning(
+                    f"Monitor limit reached ({self._MAX_CONCURRENT}), "
+                    f"refusing monitor for machine {machine_id}"
+                )
+                state = MonitorState(
+                    machine_id=machine_id,
+                    machine_name=machine_name,
+                    ip_address=ip_address or "",
+                    status=MonitorStatus.TIMEOUT,
+                    finished_at=time.time(),
+                )
+                return state
+
+            self._generation += 1
+            gen = self._generation
+
             if not ip_address:
                 state = MonitorState(
                     machine_id=machine_id,
                     machine_name=machine_name,
                     ip_address="",
+                    generation=gen,
                     status=MonitorStatus.NO_IP,
                     finished_at=time.time(),
                 )
                 self._monitors[machine_id] = state
-                self._schedule_eviction(machine_id)
+                self._schedule_eviction(machine_id, gen)
                 return state
 
             state = MonitorState(
                 machine_id=machine_id,
                 machine_name=machine_name,
                 ip_address=ip_address,
+                generation=gen,
                 max_attempts=max_attempts,
                 interval=interval,
             )
-            state._task = asyncio.create_task(self._run(state))
+            state._task = asyncio.create_task(
+                self._run(state),
+                name=f"wake-monitor-{machine_id}-g{gen}",
+            )
             self._monitors[machine_id] = state
             logger.info(
                 f"Monitor started: {machine_name} (id={machine_id}, "
-                f"ip={ip_address}, max_attempts={max_attempts}, "
-                f"interval={interval}s)"
+                f"ip={ip_address}, max={max_attempts}, "
+                f"interval={interval}s, gen={gen})"
             )
             return state
 
@@ -170,9 +203,13 @@ class WakeMonitorManager:
             old._task.cancel()
             old.status = MonitorStatus.CANCELLED
             old.finished_at = time.time()
-            logger.info(f"Cancelled previous monitor for machine {machine_id}")
-            return True
-        return False
+            logger.info(
+                f"Cancelled previous monitor for machine {machine_id} "
+                f"(gen={old.generation})"
+            )
+        # Always remove — whether task was running or already finished
+        self._monitors.pop(machine_id, None)
+        return True
 
     async def _run(self, state: MonitorState) -> None:
         """Background coroutine: ping the machine until success or timeout."""
@@ -193,7 +230,9 @@ class WakeMonitorManager:
                         f"ONLINE after {state.attempts} attempt(s) "
                         f"({state.elapsed}s)"
                     )
-                    self._schedule_eviction(state.machine_id)
+                    self._schedule_eviction(
+                        state.machine_id, state.generation
+                    )
                     return
 
                 # Wait before next attempt
@@ -206,7 +245,7 @@ class WakeMonitorManager:
                 f"Monitor timeout: {state.machine_name} (id={state.machine_id}) "
                 f"after {state.attempts} attempt(s) ({state.elapsed}s)"
             )
-            self._schedule_eviction(state.machine_id)
+            self._schedule_eviction(state.machine_id, state.generation)
 
         except asyncio.CancelledError:
             # Normal cancellation (re-wake or shutdown)
@@ -218,16 +257,25 @@ class WakeMonitorManager:
             )
             state.status = MonitorStatus.TIMEOUT
             state.finished_at = time.time()
-            self._schedule_eviction(state.machine_id)
+            self._schedule_eviction(state.machine_id, state.generation)
 
-    def _schedule_eviction(self, machine_id: int) -> None:
-        """Remove a finished monitor from memory after ``_EVICT_AFTER`` sec."""
+    def _schedule_eviction(self, machine_id: int, generation: int) -> None:
+        """Remove a finished monitor from memory after ``_EVICT_AFTER`` sec.
+
+        The *generation* guard ensures that if the machine was re-waked
+        between the finish and the eviction, the NEW monitor is not
+        accidentally removed.
+        """
 
         async def _evict() -> None:
             await asyncio.sleep(self._EVICT_AFTER)
-            self._monitors.pop(machine_id, None)
+            current = self._monitors.get(machine_id)
+            if current is not None and current.generation == generation:
+                self._monitors.pop(machine_id, None)
 
-        asyncio.create_task(_evict())
+        asyncio.create_task(
+            _evict(), name=f"evict-{machine_id}-g{generation}"
+        )
 
 
 # Singleton
