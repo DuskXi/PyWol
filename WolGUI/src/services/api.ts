@@ -7,6 +7,7 @@ import type {
   GroupCreate,
   GroupUpdate,
   WakeHistory,
+  WakeMonitor,
   ScheduledTask,
   ScheduledTaskCreate,
   ScheduledTaskUpdate,
@@ -61,4 +62,9 @@ export const scheduledApi = {
 export const wakeApi = {
   batch: (machineIds: number[]) =>
     api.post('/wake/batch', { machine_ids: machineIds }),
+  monitors: () => api.get<WakeMonitor[]>('/wake/monitors'),
+  monitor: (machineId: number) =>
+    api.get<WakeMonitor>(`/wake/monitors/${machineId}`),
+  cancelMonitor: (machineId: number) =>
+    api.delete(`/wake/monitors/${machineId}`),
 };

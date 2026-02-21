@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
 from app.database import init_db
+from app.monitor import wake_monitor
 from app.routers import groups, history, machines, scheduled, wake
 from app.scheduler import init_scheduler, shutdown_scheduler
 from app.wol import WOL_INTERFACE, WOL_METHOD, get_wol_info
@@ -19,6 +20,7 @@ async def lifespan(app: FastAPI):
     await init_db()
     await init_scheduler()
     yield
+    await wake_monitor.shutdown()
     await shutdown_scheduler()
     logger.info("PyWol server stopped.")
 

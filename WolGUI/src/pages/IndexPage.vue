@@ -67,6 +67,54 @@
               </q-chip>
             </div>
           </q-card-section>
+
+          <!-- Wake Monitor Progress -->
+          <template v-if="getMonitor(machine.id)">
+            <q-separator />
+            <q-card-section class="q-py-sm">
+              <div class="row items-center no-wrap">
+                <q-spinner-dots
+                  v-if="!getMonitor(machine.id)?.finished"
+                  size="1.2em"
+                  color="warning"
+                  class="q-mr-sm"
+                />
+                <q-icon
+                  v-else-if="getMonitor(machine.id)?.status === 'online'"
+                  name="check_circle"
+                  color="positive"
+                  size="1.2em"
+                  class="q-mr-sm"
+                />
+                <q-icon
+                  v-else
+                  name="cancel"
+                  color="negative"
+                  size="1.2em"
+                  class="q-mr-sm"
+                />
+                <div class="col text-caption">
+                  {{ monitorLabel(machine.id) }}
+                </div>
+                <q-btn
+                  v-if="getMonitor(machine.id)?.finished"
+                  flat round dense
+                  icon="close"
+                  size="xs"
+                  @click="dismiss(machine.id)"
+                />
+              </div>
+              <q-linear-progress
+                v-if="!getMonitor(machine.id)?.finished"
+                :value="monitorProgress(machine.id)"
+                color="warning"
+                rounded
+                class="q-mt-xs"
+                size="4px"
+              />
+            </q-card-section>
+          </template>
+
           <q-separator />
           <q-card-actions align="right">
             <q-btn flat dense color="primary" icon="power_settings_new" label="唤醒" :loading="wakingIds.has(machine.id)" @click="wakeMachine(machine)" />
@@ -104,6 +152,7 @@
 import { ref, computed, onMounted } from 'vue';
 import { useQuasar } from 'quasar';
 import { machineApi, groupApi, historyApi } from 'src/services/api';
+import { useWakeMonitor } from 'src/composables/useWakeMonitor';
 import type { Machine, Group, WakeHistory } from 'src/types';
 
 const $q = useQuasar();
@@ -115,6 +164,8 @@ const recentHistory = ref<WakeHistory[]>([]);
 const historyCount = ref(0);
 const wakingIds = ref(new Set<number>());
 const statusMap = ref<Record<string, boolean | null>>({});
+
+const { startPolling, getMonitor, dismiss } = useWakeMonitor();
 
 const onlineCount = computed(() =>
   machines.value.filter((m) => statusMap.value[String(m.id)] === true).length,
@@ -129,10 +180,34 @@ const historyColumns = [
 ];
 
 function statusClass(machine: Machine) {
+  // If monitor says online, override
+  const mon = getMonitor(machine.id);
+  if (mon?.status === 'online') return 'online';
+
   const s = statusMap.value[String(machine.id)];
   if (s === true) return 'online';
   if (s === false) return 'offline';
   return 'unknown';
+}
+
+function monitorLabel(machineId: number): string {
+  const mon = getMonitor(machineId);
+  if (!mon) return '';
+  switch (mon.status) {
+    case 'pending': return '准备检测…';
+    case 'checking': return `检测中 (${mon.attempts}/${mon.max_attempts})  ${mon.elapsed}s`;
+    case 'online': return `设备已上线 (${mon.elapsed}s)`;
+    case 'timeout': return `检测超时 (${mon.attempts} 次尝试)`;
+    case 'cancelled': return '已取消';
+    case 'no_ip': return '未配置 IP，无法检测';
+    default: return '';
+  }
+}
+
+function monitorProgress(machineId: number): number {
+  const mon = getMonitor(machineId);
+  if (!mon || mon.max_attempts === 0) return 0;
+  return mon.attempts / mon.max_attempts;
 }
 
 function formatTime(iso: string) {
@@ -178,6 +253,10 @@ async function wakeMachine(machine: Machine) {
   try {
     await machineApi.wake(machine.id);
     $q.notify({ type: 'positive', message: `已发送唤醒包至 ${machine.name}` });
+
+    // Start polling the wake monitor for this machine
+    startPolling(machine.id);
+
     // Refresh history
     const [hisRes, cntRes] = await Promise.all([
       historyApi.list(5),

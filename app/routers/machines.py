@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.database import get_db
 from app.models import MachineCreate, MachineResponse, MachineUpdate
+from app.monitor import wake_monitor
 from app.wol import check_host_online, send_wol
 
 router = APIRouter()
@@ -157,7 +158,18 @@ async def wake_machine(machine_id: int, db: aiosqlite.Connection = Depends(get_d
             (machine_id, row[1], row[2], "success", "WOL 魔术包发送成功"),
         )
         await db.commit()
-        return {"message": f"WOL 魔术包已发送至 {row[1]} ({row[2]})"}
+
+        # Start background monitor (auto-cancels any existing monitor for this machine)
+        monitor_state = await wake_monitor.start(
+            machine_id=machine_id,
+            machine_name=row[1],
+            ip_address=row[3] or "",
+        )
+
+        return {
+            "message": f"WOL 魔术包已发送至 {row[1]} ({row[2]})",
+            "monitor": monitor_state.to_dict(),
+        }
     except Exception as e:
         await db.execute(
             "INSERT INTO wake_history (machine_id, machine_name, mac_address, status, message) VALUES (?,?,?,?,?)",

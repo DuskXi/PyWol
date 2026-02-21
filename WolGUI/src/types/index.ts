@@ -89,3 +89,14 @@ export interface ScheduledTaskUpdate {
   target_id?: number;
   enabled?: boolean;
 }
+
+export interface WakeMonitor {
+  machine_id: number;
+  machine_name: string;
+  ip_address: string;
+  status: 'pending' | 'checking' | 'online' | 'timeout' | 'cancelled' | 'no_ip' | 'none';
+  attempts: number;
+  max_attempts: number;
+  elapsed: number;
+  finished: boolean;
+}

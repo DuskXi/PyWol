@@ -25,7 +25,24 @@
       <q-table :rows="filteredMachines" :columns="columns" row-key="id" flat :loading="loading" selection="multiple" v-model:selected="selected" no-data-label="暂无设备" :pagination="{ rowsPerPage: 15 }">
         <template v-slot:body-cell-status="props">
           <q-td :props="props">
-            <span class="status-dot" :class="statusClass(props.row)" />
+            <div class="row items-center no-wrap justify-center">
+              <span class="status-dot" :class="statusClass(props.row)" />
+              <!-- Wake monitor indicator -->
+              <q-spinner-dots
+                v-if="getMonitor(props.row.id) && !getMonitor(props.row.id)?.finished"
+                size="1em"
+                color="warning"
+                class="q-ml-xs"
+              />
+              <q-icon
+                v-else-if="getMonitor(props.row.id)?.status === 'online'"
+                name="check_circle"
+                color="positive"
+                size="xs"
+                class="q-ml-xs"
+              />
+            </div>
+            <q-tooltip v-if="getMonitor(props.row.id)">{{ monitorLabel(props.row.id) }}</q-tooltip>
           </q-td>
         </template>
         <template v-slot:body-cell-group_name="props">
@@ -81,6 +98,7 @@
 import { ref, computed, onMounted } from 'vue';
 import { useQuasar } from 'quasar';
 import { machineApi, groupApi, wakeApi } from 'src/services/api';
+import { useWakeMonitor } from 'src/composables/useWakeMonitor';
 import type { Machine, Group } from 'src/types';
 
 const $q = useQuasar();
@@ -94,6 +112,8 @@ const selected = ref<Machine[]>([]);
 const filterGroup = ref<number | null>(null);
 const wakingIds = ref(new Set<number>());
 const statusMap = ref<Record<string, boolean | null>>({});
+
+const { startPolling, getMonitor } = useWakeMonitor();
 
 // Dialog state
 const dialogOpen = ref(false);
@@ -119,7 +139,7 @@ const filteredMachines = computed(() => {
 });
 
 const columns = [
-  { name: 'status', label: '状态', field: 'id', align: 'center' as const, style: 'width: 50px' },
+  { name: 'status', label: '状态', field: 'id', align: 'center' as const, style: 'width: 70px' },
   { name: 'name', label: '设备名称', field: 'name', align: 'left' as const, sortable: true },
   { name: 'mac_address', label: 'MAC 地址', field: 'mac_address', align: 'left' as const },
   { name: 'ip_address', label: 'IP 地址', field: 'ip_address', align: 'left' as const },
@@ -129,10 +149,28 @@ const columns = [
 ];
 
 function statusClass(machine: Machine) {
+  // If monitor says online, override
+  const mon = getMonitor(machine.id);
+  if (mon?.status === 'online') return 'online';
+
   const s = statusMap.value[String(machine.id)];
   if (s === true) return 'online';
   if (s === false) return 'offline';
   return 'unknown';
+}
+
+function monitorLabel(machineId: number): string {
+  const mon = getMonitor(machineId);
+  if (!mon) return '';
+  switch (mon.status) {
+    case 'pending': return '准备检测…';
+    case 'checking': return `检测中 (${mon.attempts}/${mon.max_attempts}) ${mon.elapsed}s`;
+    case 'online': return `设备已上线 (${mon.elapsed}s)`;
+    case 'timeout': return `检测超时 (${mon.attempts} 次尝试)`;
+    case 'cancelled': return '已取消';
+    case 'no_ip': return '未配置 IP，无法检测';
+    default: return '';
+  }
 }
 
 function openAddDialog() {
@@ -202,6 +240,9 @@ async function wakeMachine(machine: Machine) {
   try {
     await machineApi.wake(machine.id);
     $q.notify({ type: 'positive', message: `已发送唤醒包至 ${machine.name}` });
+
+    // Start polling wake monitor
+    startPolling(machine.id);
   } catch {
     $q.notify({ type: 'negative', message: `唤醒 ${machine.name} 失败` });
   } finally {
@@ -214,6 +255,11 @@ async function batchWake() {
   try {
     await wakeApi.batch(selectedIds.value);
     $q.notify({ type: 'positive', message: `已发送唤醒包至 ${selectedIds.value.length} 台设备` });
+
+    // Start polling each machine
+    for (const id of selectedIds.value) {
+      startPolling(id);
+    }
     selected.value = [];
   } catch {
     $q.notify({ type: 'negative', message: '批量唤醒失败' });
